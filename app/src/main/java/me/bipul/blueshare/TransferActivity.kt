@@ -99,10 +99,11 @@ class TransferActivity : AppCompatActivity() {
         val repository = TransferRepositoryImpl(wifiManager, bluetoothManager)
 
         val discoverUseCase = DiscoverDevicesUseCase(repository)
+        val connectUseCase = me.bipul.blueshare.domain.usecase.ConnectToDeviceUseCase(repository)
         val sendUseCase = SendFilesUseCase(repository)
         val receiveUseCase = ReceiveFilesUseCase(repository)
 
-        viewModel = TransferViewModel(discoverUseCase, sendUseCase, receiveUseCase)
+        viewModel = TransferViewModel(discoverUseCase, connectUseCase, sendUseCase, receiveUseCase)
     }
 
     private fun setupRecyclerView() {

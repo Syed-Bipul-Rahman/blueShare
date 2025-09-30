@@ -70,11 +70,34 @@ class TransferRepositoryImpl(
     override fun connectToDevice(device: Device): Flow<FileTransferState> = flow {
         emit(FileTransferState.Connecting(device))
 
-        val dataSource = currentDataSource
+        // Select the appropriate data source based on device type
+        val dataSource = when (device.type) {
+            TransferMethod.WifiDirect -> {
+                if (wifiDirectDataSource.isAvailable() && wifiDirectDataSource.isEnabled()) {
+                    wifiDirectDataSource
+                } else null
+            }
+            TransferMethod.Bluetooth -> {
+                if (bluetoothDataSource.isAvailable() && bluetoothDataSource.isEnabled()) {
+                    bluetoothDataSource
+                } else null
+            }
+            TransferMethod.Auto -> {
+                // Prefer Bluetooth for stability
+                when {
+                    bluetoothDataSource.isAvailable() && bluetoothDataSource.isEnabled() -> bluetoothDataSource
+                    wifiDirectDataSource.isAvailable() && wifiDirectDataSource.isEnabled() -> wifiDirectDataSource
+                    else -> null
+                }
+            }
+        }
+
         if (dataSource == null) {
-            emit(FileTransferState.Failed(TransferError.NotSupported("No data source selected")))
+            emit(FileTransferState.Failed(TransferError.NotSupported("No data source available")))
             return@flow
         }
+
+        currentDataSource = dataSource
 
         when (val result = dataSource.connect(device)) {
             is Result.Success -> {

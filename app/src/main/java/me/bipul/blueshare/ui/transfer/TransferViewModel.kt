@@ -19,11 +19,13 @@ import me.bipul.blueshare.domain.usecase.SendFilesUseCase
  * Manages transfer state and coordinates use cases.
  *
  * @property discoverDevicesUseCase Use case for device discovery
+ * @property connectToDeviceUseCase Use case for connecting to a device
  * @property sendFilesUseCase Use case for sending files
  * @property receiveFilesUseCase Use case for receiving files
  */
 class TransferViewModel(
     private val discoverDevicesUseCase: DiscoverDevicesUseCase,
+    private val connectToDeviceUseCase: me.bipul.blueshare.domain.usecase.ConnectToDeviceUseCase,
     private val sendFilesUseCase: SendFilesUseCase,
     private val receiveFilesUseCase: me.bipul.blueshare.domain.usecase.ReceiveFilesUseCase
 ) : ViewModel() {
@@ -67,14 +69,11 @@ class TransferViewModel(
      * Connects to the selected device.
      */
     fun connectToDevice(device: Device) {
+        selectedDevice = device
         viewModelScope.launch {
-            // Note: In a full implementation, we'd use a ConnectToDeviceUseCase
-            // For now, we just update the state
-            _transferState.value = FileTransferState.Connecting(device)
-
-            // Simulate connection
-            kotlinx.coroutines.delay(1000)
-            _transferState.value = FileTransferState.Connected(device)
+            connectToDeviceUseCase(device).collect { state ->
+                _transferState.value = state
+            }
         }
     }
 

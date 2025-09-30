@@ -120,10 +120,22 @@ class WifiDirectManager(private val context: Context) : NetworkDataSource {
             deviceAddress = device.address
         }
 
+        // Register connection info listener
+        val connectionInfoListener = WifiP2pManager.ConnectionInfoListener { info ->
+            connectionInfo = info
+        }
+
+        manager?.requestConnectionInfo(wifiChannel, connectionInfoListener)
+
         manager?.connect(wifiChannel, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 connectedDevice = device
-                continuation.resume(Result.Success(Unit))
+
+                // Request connection info after successful connection
+                manager?.requestConnectionInfo(wifiChannel) { info ->
+                    connectionInfo = info
+                    continuation.resume(Result.Success(Unit))
+                }
             }
 
             override fun onFailure(reason: Int) {
@@ -175,20 +187,156 @@ class WifiDirectManager(private val context: Context) : NetworkDataSource {
         )
     }
 
-    // Note: File transfer implementation would go here
-    // For brevity, these are placeholder implementations
     override suspend fun sendFile(
         file: me.bipul.blueshare.core.model.TransferFile,
         onProgress: (progress: Int, bytesTransferred: Long, speed: Long) -> Unit
-    ): Result<Unit> {
-        // Implementation would use sockets to transfer data
-        return Result.Error(TransferError.NotSupported("Send not yet implemented"))
+    ): Result<Unit> = suspendCoroutine { continuation ->
+        if (connectionInfo == null || !connectionInfo!!.groupFormed) {
+            continuation.resume(Result.Error(TransferError.ConnectionFailed("Not connected")))
+            return@suspendCoroutine
+        }
+
+        Thread {
+            try {
+                val socket = java.net.Socket()
+                socket.connect(
+                    java.net.InetSocketAddress(connectionInfo!!.groupOwnerAddress, WIFI_DIRECT_PORT),
+                    5000
+                )
+
+                val outputStream = socket.getOutputStream()
+                val dataOutputStream = java.io.DataOutputStream(outputStream)
+                val inputStream = context.contentResolver.openInputStream(file.uri)
+
+                if (inputStream == null) {
+                    socket.close()
+                    continuation.resume(Result.Error(TransferError.FileError("Cannot open file")))
+                    return@Thread
+                }
+
+                // Send file metadata first
+                dataOutputStream.writeUTF(file.safeName)
+                dataOutputStream.writeLong(file.size)
+                dataOutputStream.writeUTF(file.mimeType ?: "application/octet-stream")
+                dataOutputStream.flush()
+
+                // Send file data
+                val buffer = ByteArray(8192)
+                var bytesTransferred = 0L
+                val startTime = System.currentTimeMillis()
+                var lastProgressTime = startTime
+
+                while (true) {
+                    val read = inputStream.read(buffer)
+                    if (read == -1) break
+
+                    outputStream.write(buffer, 0, read)
+                    bytesTransferred += read
+
+                    // Update progress every 100ms
+                    val now = System.currentTimeMillis()
+                    if (now - lastProgressTime > 100) {
+                        val progress = ((bytesTransferred * 100) / file.size).toInt()
+                        val elapsed = now - startTime
+                        val speed = if (elapsed > 0) bytesTransferred * 1000 / elapsed else 0
+                        onProgress(progress, bytesTransferred, speed)
+                        lastProgressTime = now
+                    }
+                }
+
+                // Final progress update
+                onProgress(100, bytesTransferred, 0)
+
+                inputStream.close()
+                outputStream.close()
+                socket.close()
+
+                continuation.resume(Result.Success(Unit))
+            } catch (e: Exception) {
+                continuation.resume(Result.Error(TransferError.ConnectionLost("Transfer failed: ${e.message}", e)))
+            }
+        }.start()
     }
 
     override suspend fun receiveFile(
         onProgress: (progress: Int, bytesTransferred: Long, speed: Long) -> Unit
-    ): Result<me.bipul.blueshare.core.model.TransferFile> {
-        // Implementation would use sockets to receive data
-        return Result.Error(TransferError.NotSupported("Receive not yet implemented"))
+    ): Result<me.bipul.blueshare.core.model.TransferFile> = suspendCoroutine { continuation ->
+        if (connectionInfo == null || !connectionInfo!!.groupFormed) {
+            continuation.resume(Result.Error(TransferError.ConnectionFailed("Not connected")))
+            return@suspendCoroutine
+        }
+
+        Thread {
+            var serverSocket: java.net.ServerSocket? = null
+            try {
+                serverSocket = java.net.ServerSocket(WIFI_DIRECT_PORT)
+                serverSocket.soTimeout = 30000 // 30 second timeout
+
+                val clientSocket = serverSocket.accept()
+                val inputStream = clientSocket.getInputStream()
+                val dataInputStream = java.io.DataInputStream(inputStream)
+
+                // Read file metadata
+                val fileName = dataInputStream.readUTF()
+                val fileSize = dataInputStream.readLong()
+                val mimeType = dataInputStream.readUTF()
+
+                // Create file in Downloads
+                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                val outputFile = java.io.File(downloadsDir, fileName)
+                val outputStream = java.io.FileOutputStream(outputFile)
+
+                // Receive file data
+                val buffer = ByteArray(8192)
+                var bytesTransferred = 0L
+                val startTime = System.currentTimeMillis()
+                var lastProgressTime = startTime
+
+                while (bytesTransferred < fileSize) {
+                    val toRead = minOf(buffer.size.toLong(), fileSize - bytesTransferred).toInt()
+                    val read = inputStream.read(buffer, 0, toRead)
+                    if (read == -1) break
+
+                    outputStream.write(buffer, 0, read)
+                    bytesTransferred += read
+
+                    // Update progress every 100ms
+                    val now = System.currentTimeMillis()
+                    if (now - lastProgressTime > 100) {
+                        val progress = ((bytesTransferred * 100) / fileSize).toInt()
+                        val elapsed = now - startTime
+                        val speed = if (elapsed > 0) bytesTransferred * 1000 / elapsed else 0
+                        onProgress(progress, bytesTransferred, speed)
+                        lastProgressTime = now
+                    }
+                }
+
+                // Final progress update
+                onProgress(100, bytesTransferred, 0)
+
+                outputStream.close()
+                inputStream.close()
+                clientSocket.close()
+
+                val transferFile = me.bipul.blueshare.core.model.TransferFile(
+                    uri = android.net.Uri.fromFile(outputFile),
+                    name = fileName,
+                    size = fileSize,
+                    mimeType = mimeType
+                )
+
+                continuation.resume(Result.Success(transferFile))
+            } catch (e: Exception) {
+                continuation.resume(Result.Error(TransferError.ConnectionLost("Receive failed: ${e.message}", e)))
+            } finally {
+                serverSocket?.close()
+            }
+        }.start()
+    }
+
+    companion object {
+        private const val WIFI_DIRECT_PORT = 8888
     }
 }
