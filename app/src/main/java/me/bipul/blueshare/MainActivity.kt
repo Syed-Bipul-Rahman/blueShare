@@ -44,6 +44,27 @@ class MainActivity : AppCompatActivity() {
         }
 
         checkAndRequestPermissions()
+        setupClickListeners()
+    }
+
+    private fun setupClickListeners() {
+        binding.btnSend.setOnClickListener {
+            // Start send mode - discover devices
+            val intent = android.content.Intent(this, TransferActivity::class.java)
+            intent.putExtra(TransferActivity.EXTRA_MODE, TransferActivity.MODE_SEND)
+            startActivity(intent)
+        }
+
+        binding.btnReceive.setOnClickListener {
+            // Start receive mode - wait for connection
+            val intent = android.content.Intent(this, TransferActivity::class.java)
+            intent.putExtra(TransferActivity.EXTRA_MODE, TransferActivity.MODE_RECEIVE)
+            startActivity(intent)
+        }
+
+        binding.fabSettings.setOnClickListener {
+            Snackbar.make(binding.root, "Settings coming soon!", Snackbar.LENGTH_SHORT).show()
+        }
     }
 
     private fun checkAndRequestPermissions() {

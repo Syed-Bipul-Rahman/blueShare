@@ -14,3 +14,7 @@
 .cxx
 local.properties
 /.idea/vcs.xml
+core/build/
+data/build/
+domain/build/
+network/build/
